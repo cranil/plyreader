@@ -70,4 +70,3 @@ func read_type( type_name, data string ) []byte {
 func parse_header(file *os.File, p *PLY) {
 	r := bufio.NewReader(file)
 }
-
