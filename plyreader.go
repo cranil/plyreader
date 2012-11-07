@@ -61,12 +61,25 @@ type Property struct {
 	Data         [][]byte
 	Type         string
 	ListSizeType string
+	pos          int
 }
 
 type Element struct {
 	Name       string
 	Properties []*Property
 	Size       int
+}
+
+func (p *Property)print() {
+	if p.IsList {
+		fmt.Printf("\tproperty list %s %s %s\n", p.ListSizeType, p.Type, p.Name)
+	} else {
+		fmt.Printf("\tproperty %s %s\n", p.Type, p.Name)
+	}
+}
+
+func (e *Element) print() {
+	fmt.Printf("element %s\n", e.Name)
 }
 
 const (
@@ -91,30 +104,55 @@ func (p *PLY) Save(filename string) error {
 func (p *PLY) Load(filename string) error {
 	p.filename = filename
 	file, file_io_error := os.Open(filename)
+	p.reader = bufio.NewReader(file)
 	if file_io_error != nil {
 		return file_io_error
 	}
-	r := bufio.NewReader(file)
 	e := parse_header(p)
 	if e != nil {
 		return e
 	}
-	return nil
-}
-
-func (p *PLY) Read(elemName, propName string) (data [][]byte, e error) {
 	switch p.FileType {
 	case BinaryBigEndian:
-		data, e = parse_binary_big_endian(p, elemName, propName)
+		e = parse_binary_big_endian(p)
 	case BinaryLittleEndian:
-		data, e = parse_binary_little_endian(p, elemName, propName)
+		e = parse_binary_little_endian(p)
 	case Ascii:
-		data, e = parse_ascii(p, elemName, propName)
+		e = parse_ascii(p)
 	default:
-		data = make([][]byte,0)
 		e = errors.New("File type error")
 	}
-	return data, e
+	return e
+}
+
+func (p *PLY) ReadVertices() ([][]float32) {
+	flag := false
+	count := 0
+	fmt.Println(count)
+	for _, elem := range p.Elements {
+		if elem.Name == "vertex" {
+			flag = true
+			break
+		}
+		count++
+	}
+	if flag {
+		data := make([][]float32, 3)
+		for j:=0; j<3; j++ {
+			fmt.Println(count)
+			elem := p.Elements[count]
+			b := elem.Properties[j].Data
+			i := 0
+			data[j] = make([]float32, elem.Size)
+			for _, v := range b {
+				buf := bytes.NewBuffer(v)
+				binary.Write(buf, binary.LittleEndian, data[j][i])
+				i++
+			}
+		}
+		return data
+	}
+	return nil
 }
 
 func strip(s string) string {
@@ -129,7 +167,7 @@ func readLine(r *bufio.Reader) (line string, e error) {
 	return strip(line), nil
 }
 
-func to_type(type_name, data string) (b []byte, e error) {
+func to_type(data, type_name string) (b []byte, e error) {
 	var n int64
 	var u uint64
 	var f float64
@@ -165,16 +203,6 @@ func to_type(type_name, data string) (b []byte, e error) {
 		binary.Write(buf, binary.LittleEndian, &t)
 		return b, nil
 	case type_name == Types[4] || type_name == OldTypes[4]:
-		n, e = strconv.ParseInt(data, 0, 64)
-		t := int64(n)
-		if e != nil {
-			return nil, e
-		}
-		b := make([]byte, 8)
-		buf := bytes.NewBuffer(b)
-		binary.Write(buf, binary.LittleEndian, &t)
-		return b, nil
-	case type_name == Types[5] || type_name == OldTypes[5]:
 		u, e = strconv.ParseUint(data, 0, 8)
 		t := uint8(u)
 		if e != nil {
@@ -184,7 +212,7 @@ func to_type(type_name, data string) (b []byte, e error) {
 		buf := bytes.NewBuffer(b)
 		binary.Write(buf, binary.LittleEndian, &t)
 		return b, nil
-	case type_name == Types[6] || type_name == OldTypes[6]:
+	case type_name == Types[5] || type_name == OldTypes[5]:
 		u, e = strconv.ParseUint(data, 0, 16)
 		t := uint16(u)
 		if e != nil {
@@ -194,7 +222,7 @@ func to_type(type_name, data string) (b []byte, e error) {
 		buf := bytes.NewBuffer(b)
 		binary.Write(buf, binary.LittleEndian, &t)
 		return b, nil
-	case type_name == Types[7] || type_name == OldTypes[7]:
+	case type_name == Types[6] || type_name == OldTypes[6]:
 		u, e = strconv.ParseUint(data, 0, 32)
 		t := uint32(u)
 		if e != nil {
@@ -204,17 +232,7 @@ func to_type(type_name, data string) (b []byte, e error) {
 		buf := bytes.NewBuffer(b)
 		binary.Write(buf, binary.LittleEndian, &t)
 		return b, nil
-	case type_name == Types[8] || type_name == OldTypes[8]:
-		u, e = strconv.ParseUint(data, 0, 64)
-		t := uint64(u)
-		if e != nil {
-			return nil, e
-		}
-		b := make([]byte, 8)
-		buf := bytes.NewBuffer(b)
-		binary.Write(buf, binary.LittleEndian, &t)
-		return b, nil
-	case type_name == Types[9] || type_name == OldTypes[9]:
+	case type_name == Types[7] || type_name == OldTypes[7]:
 		f, e = strconv.ParseFloat(data, 32)
 		t := float32(f)
 		if e != nil {
@@ -224,7 +242,7 @@ func to_type(type_name, data string) (b []byte, e error) {
 		buf := bytes.NewBuffer(b)
 		binary.Write(buf, binary.LittleEndian, &t)
 		return b, nil
-	case type_name == Types[10] || type_name == OldTypes[10]:
+	case type_name == Types[8] || type_name == OldTypes[8]:
 		f, e = strconv.ParseFloat(data, 64)
 		t := float64(f)
 		if e != nil {
@@ -280,6 +298,7 @@ func parse_header(p *PLY) error {
 			p.filename + " at line " + itoa(p.currentLine))
 	}
 	currentElem := -1
+	propPos     := 0
 	for {
 		line, e = readLine(r)
 		if e != nil {
@@ -301,10 +320,12 @@ func parse_header(p *PLY) error {
 			elem.Name = elemName
 			p.Elements = append(p.Elements, elem)
 			currentElem++
+			propPos = 0
 		} else if words[0][0] == "property" {
 			cnt := 1
 			currWord := words[cnt][0]
 			prop := new(Property)
+			prop.pos = propPos
 			if currWord == "list" {
 				prop.IsList = true
 				cnt++
@@ -312,7 +333,6 @@ func parse_header(p *PLY) error {
 				prop.ListSizeType = currWord
 				cnt++
 				currWord = words[cnt][0]
-				fmt.Println(words, cnt)
 			} else {
 				prop.IsList = false
 			}
@@ -323,6 +343,7 @@ func parse_header(p *PLY) error {
 			prop.Name = propName
 			p.Elements[currentElem].Properties =
 				append(p.Elements[currentElem].Properties, prop)
+			propPos++
 		} else if words[0][0] == "obj_info" {
 			if p.ObjInfoItems == nil {
 				p.ObjInfoItems = make(map[string]string)
@@ -335,40 +356,86 @@ func parse_header(p *PLY) error {
 	return nil
 }
 
-func parse_binary_big_endian(p *PLY, elemName, propName string) ([][]byte, error) {
-	data := make([][]byte,0)
-	e := errors.New("Not yet implemented")
-	return data, e
+func appendBytes(slice, data[]byte) []byte {
+    l := len(slice);
+    if l + len(data) > cap(slice) {	// reallocate
+    	// Allocate double what's needed, for future growth.
+    	newSlice := make([]byte, (l+len(data))*2);
+    	// Copy data (could use bytes.Copy()).
+    	for i, c := range slice {
+    		newSlice[i] = c
+    	}
+    	slice = newSlice;
+    }
+    slice = slice[0:l+len(data)];
+    for i, c := range data {
+    	slice[l+i] = c
+    }
+    return slice;
 }
 
-func parse_binary_little_endian(p *PLY, elemName, propName string) ([][]byte, error) {
-	data := make([][]byte,0)
+func parse_binary_big_endian(p *PLY) error {
 	e := errors.New("Not yet implemented")
-	return data, e
+	return e
 }
 
-func parse_ascii(p *PLY, elemName, propName string) ([][]byte, error) {
+func parse_binary_little_endian(p *PLY) error {
+	e := errors.New("Not yet implemented")
+	return e
+}
+
+func parse_ascii(p *PLY) error {
 	r := p.reader
-	data := make([][]byte,0)
 	numMatcher, e := regexp.Compile("[\\+\\-]*([0-9]*)+\\.*[0-9]+")
 	if e != nil {
-		return data, e
+		return e
 	}
-	var elem *Element
-	var propName
-	elem = nil
-	for _, element := range p.Elements {
-		if elemName == element.Name {
-			elem = element
+	for _, elem := range p.Elements {
+		elem.print()
+		for _, prop := range elem.Properties {
+			prop.print()
+			prop.Data = make([][]byte, elem.Size)
+		}
+		for i:=0; i<elem.Size; i++ {
+			line, e := readLine(r)
+			if e != nil {
+				return e
+			}
+			words := numMatcher.FindAllStringSubmatch(line, -1)
+			currWord := 0
+			if words == nil {
+				// skip empty lines
+			} else {
+				for _, prop := range elem.Properties {
+					if prop.IsList {
+						num, e := strconv.ParseInt(words[currWord][0], 10, 32)
+						if e != nil {
+							return e
+						}
+						numSize := int(num)
+						currWord++
+						l := make([]byte, numSize*SizeOfType[prop.Type])
+						for j:=0; j<numSize; j++ {
+							b, e := to_type(words[currWord][0], prop.Type)
+							if e!=nil {
+								return e
+							}
+							l = appendBytes(l, b)
+							currWord++
+						}
+						prop.Data[i] = l
+					} else {
+						b, e := to_type(words[currWord][0], prop.Type)
+						if e!=nil {
+							fmt.Println("")
+							prop.print()
+							return e
+						}
+						prop.Data[i] = b
+					}
+				}
+			}
 		}
 	}
-	if elem == nil {
-		return data, errors.New("Property does not exist")
-	}
-	for _, property := range elem.Properties {
-		if propName == property.Name {
-			prop = property
-		}
-	}
-	return data, nil
+	return nil
 }
